@@ -61,9 +61,9 @@ app.post('/api/bookings', async (req, res) => {
     });
 
     const mailOptions = {
-      from: 'zesthaus.events@gmail.com',
-      to: user.email,
-      subject: '🎫 Qawwali Night Ticket Confirmation',
+      from: '"Zesthaus Events" <zesthaus.events@gmail.com>',
+      to: user.email, // or userEmail
+      subject: "Jashn-e-Qawwal – Booking Confirmation",
       html: `
         <h2>Thanks for Booking!</h2>
         <p><strong>Payment ID:</strong> ${paymentId}</p>
