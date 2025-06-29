@@ -64,7 +64,7 @@ app.post('/api/bookings', async (req, res) => {
     const mailOptions = {
       from: '"Zesthaus Events" <zesthaus.events@gmail.com>',
       to: user.email,
-      subject: "Jashn-e-Qawwal – Booking Confirmation",
+      subject: "Jashn-e-Qawwali – Booking Confirmation",
       html: `
         <h2>Thank you for booking with Zesthaus Events!</h2>
         <p>Dear ${userName},</p>
@@ -77,7 +77,7 @@ app.post('/api/bookings', async (req, res) => {
         <p><strong>25 July 2025</strong> at <strong>7:00 PM</strong></p>
 
         <p>Please present the below QR code at the entrance. It is valid for one-time scan only:</p>
-        <img src="${qrImage}" alt="QR Code" style="max-width:200px;">
+        <img src="cid:qrcode" alt="QR Code" style="max-width:200px;">
 
         <p>Looking forward to welcoming you!</p>
         <p>Warm regards,<br>Zesthaus Events Team</p>
