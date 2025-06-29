@@ -174,6 +174,7 @@ app.delete('/admin/bookings/:id', async (req, res) => {
   }
 });
 
+// Update the offline booking route to pass the name
 app.post('/admin/offline-booking', async (req, res) => {
   try {
     const { user, seats, price, paymentId } = req.body;
@@ -196,8 +197,8 @@ app.post('/admin/offline-booking', async (req, res) => {
     newBooking.qrCode = await QRCode.toDataURL(qrData);
     await newBooking.save();
 
-    // Send email with QR code
-    await sendEmailWithQR(user.email, newBooking.qrCode);
+    // Send email with QR code, pass name as argument
+    await sendEmailWithQR(user.email, newBooking.qrCode, user.name);
 
     res.json({ message: "Offline booking added and email sent", booking: newBooking });
   } catch (err) {
@@ -214,15 +215,18 @@ const transporter = nodemailer.createTransport({
   }
 });
 
-// Utility function to send QR email
-async function sendEmailWithQR(to, qrDataUrl) {
-  const name = to.split('@')[0]; // Or pass name as argument if available
-  const qrImage = qrDataUrl;
+// Update the sendEmailWithQR function to accept name
+async function sendEmailWithQR(to, qrDataUrl, name = "") {
+  if (!name) {
+    name = to.split('@')[0];
+  }
+  // Extract base64 data from Data URL
+  const base64Data = qrDataUrl.replace(/^data:image\/png;base64,/, "");
 
   const mailOptions = {
     from: '"Zesthaus Events" <' + process.env.EMAIL_USER + '>',
     to,
-    subject: 'Jashn-e-Qawwal – Booking Confirmation',
+    subject: 'Jashn-e-Qawwali – Booking Confirmation',
     html: `
       <h2>Thank you for booking with Zesthaus Events!</h2>
       <p>Dear <strong>${name}</strong>,</p>
@@ -233,7 +237,7 @@ async function sendEmailWithQR(to, qrDataUrl) {
       <p><strong>🕖 Time:</strong> 7:00 PM</p>
 
       <p>Please present the QR code below at the event. This is valid for one-time scan only:</p>
-      <img src="${qrImage}" alt="QR Code" style="max-width: 200px;">
+      <img src="cid:qrcode" alt="QR Code" style="max-width: 200px;">
 
       <h3>📌 Terms & Conditions</h3>
       <ul>
@@ -243,7 +247,15 @@ async function sendEmailWithQR(to, qrDataUrl) {
         <li>No outside food, drinks, or prohibited items allowed.</li>
         <li>Only age 16+ allowed. Schedule subject to change.</li>
       </ul>
-    `
+    `,
+    attachments: [
+      {
+        filename: 'qrcode.png',
+        content: base64Data,
+        encoding: 'base64',
+        cid: 'qrcode'
+      }
+    ]
   };
   return transporter.sendMail(mailOptions);
 }
@@ -261,4 +273,4 @@ function getSeatType(seat) {
 // const PORT = process.env.PORT || 5000;
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on port ${PORT}`);
-});      
+});
