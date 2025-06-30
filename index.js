@@ -60,19 +60,35 @@ app.post('/api/bookings', async (req, res) => {
       }
     });
 
+    const userName = user?.name || "";
     const mailOptions = {
-      from: 'zesthaus.events@gmail.com',
+      from: '"Zesthaus Events" <zesthaus.events@gmail.com>',
       to: user.email,
-      subject: '🎫 Qawwali Night Ticket Confirmation',
+      subject: "Jashn-e-Qawwal – Booking Confirmation",
       html: `
-        <h2>Thanks for Booking!</h2>
-        <p><strong>Payment ID:</strong> ${paymentId}</p>
-        <p><strong>Seats:</strong> ${seats.join(', ')}</p>
-        <p><strong>Total Price:</strong> ₹${price}</p>
-        <p>📍 See you on <strong>15th July 2025</strong> at the Qawwali Night in Mumbai!</p>
-        <p><strong>Your Ticket QR Code:</strong></p>
-        <img src="cid:qrcode" alt="QR Code Ticket" />
-        <p>Show this QR code at the event entrance for verification.</p>
+        <h2>Thank you for booking with Zesthaus Events!</h2>
+        <p>Dear ${userName},</p>
+        <p>Your booking for <strong>Jashn-e-Qawwal</strong> is confirmed.</p>
+
+        <h3>📍 Venue:</h3>
+        <p><strong>SANSKRUTI BANQUET</strong><br>Grant Road West, Mumbai</p>
+
+        <h3>🕖 Date & Time:</h3>
+        <p><strong>25 July 2025</strong> at <strong>7:00 PM</strong></p>
+
+        <p>Please present the below QR code at the entrance. It is valid for one-time scan only:</p>
+        <img src="${qrImage}" alt="QR Code" style="max-width:200px;">
+
+        <p>Looking forward to welcoming you!</p>
+        <p>Warm regards,<br>Zesthaus Events Team</p>
+        <h3>📌 Terms & Conditions</h3>
+        <ul>
+          <li>Tickets are non-refundable and non-transferable.</li>
+          <li>Entry is subject to QR code scanning and security checks.</li>
+          <li>ID proof may be required.</li>
+          <li>No outside food, drinks, or prohibited items allowed.</li>
+          <li>Only age 16+ allowed. Schedule subject to change.</li>
+        </ul>
       `,
       attachments: [
         {
@@ -200,25 +216,34 @@ const transporter = nodemailer.createTransport({
 
 // Utility function to send QR email
 async function sendEmailWithQR(to, qrDataUrl) {
-  const base64Data = qrDataUrl.replace(/^data:image\/png;base64,/, "");
+  const name = to.split('@')[0]; // Or pass name as argument if available
+  const qrImage = qrDataUrl;
+
   const mailOptions = {
-    from: process.env.EMAIL_USER,
+    from: '"Zesthaus Events" <' + process.env.EMAIL_USER + '>',
     to,
-    subject: '🎫 Qawwali Night Ticket Confirmation (Offline)',
+    subject: 'Jashn-e-Qawwal – Booking Confirmation',
     html: `
-      <h2>Your Offline Ticket</h2>
-      <p>Please present this QR code at the event entrance:</p>
-      <img src="cid:qrcode" alt="QR Code Ticket" />
-      <p>Thank you for booking with Zesthaus Events!</p>
-    `,
-    attachments: [
-      {
-        filename: 'qrcode.png',
-        content: base64Data,
-        encoding: 'base64',
-        cid: 'qrcode'
-      }
-    ]
+      <h2>Thank you for booking with Zesthaus Events!</h2>
+      <p>Dear <strong>${name}</strong>,</p>
+      <p>Your booking for <strong>Jashn-e-Qawwal</strong> is confirmed.</p>
+
+      <p><strong>📍 Venue:</strong><br>SANSKRUTI BANQUET, Grant Road West, Mumbai</p>
+      <p><strong>📅 Date:</strong> 25 July 2025</p>
+      <p><strong>🕖 Time:</strong> 7:00 PM</p>
+
+      <p>Please present the QR code below at the event. This is valid for one-time scan only:</p>
+      <img src="${qrImage}" alt="QR Code" style="max-width: 200px;">
+
+      <h3>📌 Terms & Conditions</h3>
+      <ul>
+        <li>Tickets are non-refundable and non-transferable.</li>
+        <li>Entry is subject to QR code scanning and security checks.</li>
+        <li>ID proof may be required.</li>
+        <li>No outside food, drinks, or prohibited items allowed.</li>
+        <li>Only age 16+ allowed. Schedule subject to change.</li>
+      </ul>
+    `
   };
   return transporter.sendMail(mailOptions);
 }
