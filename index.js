@@ -378,7 +378,6 @@
 // });
 
 
-
 const express = require('express');
 const cors = require('cors');
 const mongoose = require('mongoose');
@@ -485,7 +484,7 @@ app.post('/auth/login', async (req, res) => {
   // Find or create user
   let user = await User.findOne({ email });
   if (!user) {
-    user = await User.create({ email, name: email.split('@')[0] });
+    user = await User.create({ email, name: email.split('@')[0] }); // Only uses email and name
   }
 
   // Issue JWT
