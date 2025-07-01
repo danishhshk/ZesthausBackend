@@ -388,7 +388,7 @@ require('dotenv').config();
 
 const app = express();
 app.use(cors({
-  origin: 'https://zesthausevents.com', // or your deployed frontend URL
+  origin: 'http://localhost:3000', // or your deployed frontend URL
   credentials: true
 }));
 app.use(express.json());
@@ -470,7 +470,31 @@ app.post('/auth/send-otp', async (req, res) => {
   }
 });
 
-// --- Login with OTP Endpoint ---
+// --- Signup Endpoint ---
+app.post('/auth/signup', async (req, res) => {
+  const { email, otp, name } = req.body;
+  if (!email || !otp || !name) return res.status(400).json({ message: "Email, name, and OTP required" });
+
+  const validOtp = getOTP(email);
+  if (!validOtp || validOtp !== otp) {
+    return res.status(401).json({ message: "Invalid or expired OTP" });
+  }
+  deleteOTP(email);
+
+  // Check if user already exists
+  let user = await User.findOne({ email });
+  if (user) {
+    return res.status(400).json({ message: "User already exists. Please login." });
+  }
+
+  user = await User.create({ email, name });
+
+  // Issue JWT
+  const token = jwt.sign({ id: user._id, email: user.email }, process.env.JWT_SECRET, { expiresIn: '7d' });
+  res.json({ token, user });
+});
+
+// --- Login Endpoint ---
 app.post('/auth/login', async (req, res) => {
   const { email, otp } = req.body;
   if (!email || !otp) return res.status(400).json({ message: "Email and OTP required" });
@@ -481,10 +505,10 @@ app.post('/auth/login', async (req, res) => {
   }
   deleteOTP(email);
 
-  // Find or create user
+  // Only allow login if user exists
   let user = await User.findOne({ email });
   if (!user) {
-    user = await User.create({ email, name: email.split('@')[0] }); // Only uses email and name
+    return res.status(400).json({ message: "User not registered. Please sign up first." });
   }
 
   // Issue JWT
@@ -745,6 +769,20 @@ app.get('/api/booked-front-row-seats', async (req, res) => {
   const bookings = await Booking.find({}, 'frontRowSeats');
   const allSeats = bookings.flatMap(b => b.frontRowSeats);
   res.json({ bookedSeats: allSeats });
+});
+
+// Admin route to get all users
+app.get('/admin/users', async (req, res) => {
+  const auth = req.headers.authorization;
+  if (auth !== 'Bearer supersecrettoken123') {
+    return res.status(401).json({ message: 'Unauthorized' });
+  }
+  try {
+    const users = await User.find({}, { email: 1, name: 1, _id: 1 });
+    res.json(users);
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to fetch users' });
+  }
 });
 
 // --- Utility Functions ---
