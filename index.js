@@ -388,7 +388,7 @@ require('dotenv').config();
 
 const app = express();
 app.use(cors({
-  origin: 'https://zesthausevents.com', // or your deployed frontend URL
+  origin: 'http://zesthausevents.com', // or your deployed frontend URL
   credentials: true
 }));
 app.use(express.json());
@@ -449,18 +449,37 @@ function deleteOTP(email) {
 
 // --- Send OTP Endpoint ---
 app.post('/auth/send-otp', async (req, res) => {
-  const { email } = req.body;
+  const { email, forSignup } = req.body;
   if (!email) return res.status(400).json({ message: "Email required" });
+
+  // Only send OTP for login if user exists
+  if (!forSignup) {
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res.status(400).json({ message: "User not registered. Please sign up first." });
+    }
+  }
 
   const otp = generateOTP();
   setOTP(email, otp);
 
-  // Send OTP via email
+  // Send OTP via email (updated content)
   const mailOptions = {
     from: '"Zesthaus Events" <' + process.env.EMAIL_USER + '>',
     to: email,
-    subject: "Your OTP for Zesthaus Events",
-    html: `<p>Your OTP is: <b>${otp}</b>. It is valid for 5 minutes.</p>`
+    subject: "Zesthaus Events Email Verification Code",
+    html: `
+      <div style="font-family: Arial, sans-serif; color: #222;">
+        <h2 style="color:#1e3c72;">Zesthaus Events – Email Verification</h2>
+        <p>Dear Guest,</p>
+        <p>Your verification code is:</p>
+        <div style="font-size:2rem; font-weight:bold; letter-spacing:4px; margin:16px 0; color:#1e3c72;">${otp}</div>
+        <p>This code is valid for 5 minutes. Please enter it on the website to verify your email and continue.</p>
+        <p>If you did not request this code, you can safely ignore this email.</p>
+        <br>
+        <p>Best regards,<br>Zesthaus Events Team</p>
+      </div>
+    `
   };
   try {
     await transporter.sendMail(mailOptions);
@@ -494,7 +513,7 @@ app.post('/auth/signup', async (req, res) => {
   res.json({ token, user });
 });
 
-// --- Login Endpoint ---
+// Backend: /auth/login
 app.post('/auth/login', async (req, res) => {
   const { email, otp } = req.body;
   if (!email || !otp) return res.status(400).json({ message: "Email and OTP required" });
@@ -577,7 +596,7 @@ app.post('/api/bookings', async (req, res) => {
         <h3>📍 Venue:</h3>
         <p><strong>SANSKRUTI BANQUET</strong><br>Grant Road West, Mumbai</p>
         <h3>🕖 Date & Time:</h3>
-        <p><strong>25 July 2025</strong> at <strong>7:00 PM</strong></p>
+        <p><strong>26 July 2025</strong> at <strong>7:00 PM</strong></p>
         <p>Please present the below QR code at the entrance. It is valid for one-time scan only:</p>
         <img src="cid:qrcode" alt="QR Code" style="max-width:200px;">
         <p>Looking forward to welcoming you!</p>
@@ -726,7 +745,7 @@ app.post('/admin/offline-booking', async (req, res) => {
         <h3>📍 Venue:</h3>
         <p><strong>SANSKRUTI BANQUET</strong><br>Grant Road West, Mumbai</p>
         <h3>🕖 Date & Time:</h3>
-        <p><strong>25 July 2025</strong> at <strong>7:00 PM</strong></p>
+        <p><strong>26 July 2025</strong> at <strong>7:00 PM</strong></p>
         <p>Please present the below QR code at the entrance. It is valid for one-time scan only:</p>
         <img src="cid:qrcode" alt="QR Code" style="max-width:200px;">
         <p>Looking forward to welcoming you!</p>
