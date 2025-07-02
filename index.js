@@ -388,7 +388,7 @@ require('dotenv').config();
 
 const app = express();
 app.use(cors({
-  origin: 'http://zesthausevents.com', // or your deployed frontend URL
+  origin: 'https://zesthausevents.com', // or your deployed frontend URL
   credentials: true
 }));
 app.use(express.json());
