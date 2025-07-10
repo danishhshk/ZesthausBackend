@@ -377,7 +377,6 @@
 //   console.log(`Server running on port ${PORT}`);
 // });
 
-
 const express = require('express');
 const cors = require('cors');
 const mongoose = require('mongoose');
@@ -544,12 +543,33 @@ async function areFrontRowSeatsAvailable(seats) {
 
 // Public booking route
 app.post('/api/bookings', async (req, res) => {
-  const { user, price, paymentId, frontRowSeats = [], frontRowCount = 0, generalCount = 0, vipTable } = req.body;
+  const { user, price, paymentId, frontRowSeats = [], frontRowCount = 0, generalCount = 0, vipTable, combo } = req.body;
 
   // Reject VIP bookings from public API
   if (vipTable) {
     return res.status(400).json({ message: "VIP bookings are only allowed via admin." });
   }
+
+  // --- Combo price validation ---
+  let expectedPrice = price;
+  if (combo === "frontrow2") {
+    expectedPrice = 1500;
+    if (frontRowCount !== 2 || generalCount !== 0) {
+      return res.status(400).json({ message: "Invalid combo selection." });
+    }
+  } else if (combo === "general4") {
+    expectedPrice = 2199;
+    if (frontRowCount !== 0 || generalCount !== 4) {
+      return res.status(400).json({ message: "Invalid combo selection." });
+    }
+  } else {
+    // Normal pricing
+    expectedPrice = (frontRowCount * 799) + (generalCount * 599);
+  }
+  if (price !== expectedPrice) {
+    return res.status(400).json({ message: "Price mismatch." });
+  }
+  // --- End combo price validation ---
 
   // Check for double-booked front row seats
   if (frontRowSeats.length > 0) {
