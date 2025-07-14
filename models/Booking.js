@@ -23,7 +23,7 @@ const bookingSchema = new mongoose.Schema({
   frontRowCount: Number,
   generalCount: Number,
   price: Number,
-  paymentId: String,
+  paymentId: { type: String, unique: true }, // <-- Make paymentId unique
   user: {
     name: { type: String, required: true },
     email: { type: String, required: true },
