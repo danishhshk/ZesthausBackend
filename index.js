@@ -479,6 +479,20 @@ function getSeatType(seat) {
   return "";
 }
 
+// Add this route to your Express backend:
+app.get('/api/booked-seats', async (req, res) => {
+  try {
+    // Adjust the Booking model and field as per your schema
+    const bookings = await Booking.find({}, 'frontRowSeats');
+    // Flatten all booked seats into a single array
+    const bookedFrontRowSeats = bookings.flatMap(b => b.frontRowSeats || []);
+    res.json({ bookedFrontRowSeats });
+  } catch (err) {
+    console.error('Error fetching booked seats:', err);
+    res.status(500).json({ error: 'Failed to fetch booked seats' });
+  }
+});
+
 // --- Start Server ---
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on port ${PORT}`);
