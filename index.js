@@ -3,10 +3,15 @@ const cors = require('cors');
 const mongoose = require('mongoose');
 const nodemailer = require("nodemailer");
 const QRCode = require('qrcode');
+const jwt = require('jsonwebtoken');
+const axios = require('axios');
 require('dotenv').config();
 
 const app = express();
-app.use(cors());
+app.use(cors({
+  origin: 'https://zesthausevents.com', // or your deployed frontend URL
+  credentials: true
+}));
 app.use(express.json());
 
 const PORT = process.env.PORT || 5000;
@@ -25,43 +30,21 @@ app.get('/', (req, res) => {
   res.send('API Running...');
 });
 
+// --- Models ---
 const Booking = require('./models/Booking');
 
-// Utility to check for double-booked front row seats
-async function areFrontRowSeatsAvailable(seats) {
-  if (!Array.isArray(seats) || seats.length === 0) return true;
-  const bookings = await Booking.find({ frontRowSeats: { $in: seats } });
-  return bookings.length === 0;
-}
-
-// Public booking route
+// Booking route (save to DB and send email)
 app.post('/api/bookings', async (req, res) => {
-  const { user, price, paymentId, frontRowSeats = [], frontRowCount = 0, generalCount = 0, vipTable } = req.body;
-
-  // Reject VIP bookings from public API
-  if (vipTable) {
-    return res.status(400).json({ message: "VIP bookings are only allowed via admin." });
-  }
-
-  // Check for double-booked front row seats
-  if (frontRowSeats.length > 0) {
-    const available = await areFrontRowSeatsAvailable(frontRowSeats);
-    if (!available) {
-      return res.status(400).json({ message: "One or more front row seats are already booked." });
-    }
-  }
+  const { seats, price, paymentId, user } = req.body;
 
   try {
-    const newBooking = new Booking({
-      user,
-      price,
-      paymentId,
-      frontRowSeats,
-      frontRowCount,
-      generalCount
-    });
+    const newBooking = new Booking({ seats, price, paymentId, user });
+    await newBooking.save();
 
-    // QR code logic (customize as needed)
+    // Get seat type from the first seat
+    const seatType = getSeatType(Array.isArray(newBooking.seats) && newBooking.seats.length > 0 ? newBooking.seats[0] : "");
+
+    // Generate QR code with booking ID, seat type, and name
     const qrData = JSON.stringify({
       bookingId: newBooking._id,
       frontRowSeats,
@@ -80,47 +63,31 @@ app.post('/api/bookings', async (req, res) => {
     const transporter = nodemailer.createTransport({
       service: 'gmail',
       auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS
+        user: 'zesthaus.events@gmail.com',
+        pass: 'gwbvnvdwoavtlcdb'
       }
     });
 
-    const userName = user?.name || "";
     const mailOptions = {
       from: '"Zesthaus Events" <zesthaus.events@gmail.com>',
       to: user.email,
       subject: "Jashn-e-Qawwali – Booking Confirmation",
       html: `
-        <h2>Thank you for booking with Zesthaus Events!</h2>
-        <p>Dear ${userName},</p>
-        <p>Your booking for <strong>Jashn-e-Qawwal</strong> is confirmed.</p>
-
-        <h3>📍 Venue:</h3>
-        <p><strong>SANSKRUTI BANQUET</strong><br>Grant Road West, Mumbai</p>
-
-        <h3>🕖 Date & Time:</h3>
-        <p><strong>25 July 2025</strong> at <strong>7:00 PM</strong></p>
-
-        <p>Please present the below QR code at the entrance. It is valid for one-time scan only:</p>
-        <img src="cid:qrcode" alt="QR Code" style="max-width:200px;">
-
-        <p>Looking forward to welcoming you!</p>
-        <p>Warm regards,<br>Zesthaus Events Team</p>
-        <h3>📌 Terms & Conditions</h3>
-        <ul>
-          <li>Tickets are non-refundable and non-transferable.</li>
-          <li>Entry is subject to QR code scanning and security checks.</li>
-          <li>ID proof may be required.</li>
-          <li>No outside food, drinks, or prohibited items allowed.</li>
-          <li>Only age 16+ allowed. Schedule subject to change.</li>
-        </ul>
+        <h2>Thanks for Booking!</h2>
+        <p><strong>Payment ID:</strong> ${paymentId}</p>
+        <p><strong>Seats:</strong> ${seats.join(', ')}</p>
+        <p><strong>Total Price:</strong> ₹${price}</p>
+        <p>📍 See you on <strong>15th July 2025</strong> at the Qawwali Night in Mumbai!</p>
+        <p><strong>Your Ticket QR Code:</strong></p>
+        <img src="cid:qrcode" alt="QR Code Ticket" />
+        <p>Show this QR code at the event entrance for verification.</p>
       `,
       attachments: [
         {
           filename: 'qrcode.png',
           content: base64Data,
           encoding: 'base64',
-          cid: 'qrcode' // same as in the img src above
+          cid: 'qrcode'
         }
       ]
     };
@@ -235,77 +202,13 @@ app.post('/admin/offline-booking', async (req, res) => {
     newBooking.qrCode = qrImage;
     await newBooking.save();
 
-    // Extract base64 data
-    const base64Data = qrImage.replace(/^data:image\/png;base64,/, "");
-
-    // Email configuration
-    const transporter = nodemailer.createTransport({
-      service: 'gmail',
-      auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS
-      }
-    });
-
-    const userName = user?.name || "";
-    const mailOptions = {
-      from: '"Zesthaus Events" <zesthaus.events@gmail.com>',
-      to: user.email,
-      subject: "Jashn-e-Qawwali – Booking Confirmation",
-      html: `
-        <h2>Thank you for booking with Zesthaus Events!</h2>
-        <p>Dear ${userName},</p>
-        <p>Your booking for <strong>Jashn-e-Qawwal</strong> is confirmed.</p>
-
-        <h3>📍 Venue:</h3>
-        <p><strong>SANSKRUTI BANQUET</strong><br>Grant Road West, Mumbai</p>
-
-        <h3>🕖 Date & Time:</h3>
-        <p><strong>25 July 2025</strong> at <strong>7:00 PM</strong></p>
-
-        <p>Please present the below QR code at the entrance. It is valid for one-time scan only:</p>
-        <img src="cid:qrcode" alt="QR Code" style="max-width:200px;">
-
-        <p>Looking forward to welcoming you!</p>
-        <p>Warm regards,<br>Zesthaus Events Team</p>
-        <h3>📌 Terms & Conditions</h3>
-        <ul>
-          <li>Tickets are non-refundable and non-transferable.</li>
-          <li>Entry is subject to QR code scanning and security checks.</li>
-          <li>ID proof may be required.</li>
-          <li>No outside food, drinks, or prohibited items allowed.</li>
-          <li>Only age 16+ allowed. Schedule subject to change.</li>
-        </ul>
-      `,
-      attachments: [
-        {
-          filename: 'qrcode.png',
-          content: base64Data,
-          encoding: 'base64',
-          cid: 'qrcode' // same as in the img src above
-        }
-      ]
-    };
-
-    transporter.sendMail(mailOptions, (err, info) => {
-      if (err) {
-        console.error('❌ Email error:', err);
-      } else {
-        console.log('📧 Email sent:', info.response);
-      }
-    });
+    // Send email with QR code
+    await sendEmailWithQR(user.email, newBooking.qrCode);
 
     res.json({ message: "Offline booking added and email sent", booking: newBooking });
   } catch (err) {
     res.status(500).json({ message: "Failed to add offline booking or send email" });
   }
-});
-
-// (Optional) Endpoint to get all booked front row seats
-app.get('/api/booked-front-row-seats', async (req, res) => {
-  const bookings = await Booking.find({}, 'frontRowSeats');
-  const allSeats = bookings.flatMap(b => b.frontRowSeats);
-  res.json({ bookedSeats: allSeats });
 });
 
 // Email transporter using env variables
@@ -317,38 +220,18 @@ const transporter = nodemailer.createTransport({
   }
 });
 
-// Update the sendEmailWithQR function to accept name
-async function sendEmailWithQR(to, qrDataUrl, name = "") {
-  if (!name) {
-    name = to.split('@')[0];
-  }
-  // Extract base64 data from Data URL
+// Utility function to send QR email
+async function sendEmailWithQR(to, qrDataUrl) {
   const base64Data = qrDataUrl.replace(/^data:image\/png;base64,/, "");
-
   const mailOptions = {
-    from: '"Zesthaus Events" <' + process.env.EMAIL_USER + '>',
+    from: process.env.EMAIL_USER,
     to,
-    subject: 'Jashn-e-Qawwali – Booking Confirmation',
+    subject: '🎫 Qawwali Night Ticket Confirmation (Offline)',
     html: `
-      <h2>Thank you for booking with Zesthaus Events!</h2>
-      <p>Dear <strong>${name}</strong>,</p>
-      <p>Your booking for <strong>Jashn-e-Qawwal</strong> is confirmed.</p>
-
-      <p><strong>📍 Venue:</strong><br>SANSKRUTI BANQUET, Grant Road West, Mumbai</p>
-      <p><strong>📅 Date:</strong> 25 July 2025</p>
-      <p><strong>🕖 Time:</strong> 7:00 PM</p>
-
-      <p>Please present the QR code below at the event. This is valid for one-time scan only:</p>
-      <img src="cid:qrcode" alt="QR Code" style="max-width: 200px;">
-
-      <h3>📌 Terms & Conditions</h3>
-      <ul>
-        <li>Tickets are non-refundable and non-transferable.</li>
-        <li>Entry is subject to QR code scanning and security checks.</li>
-        <li>ID proof may be required.</li>
-        <li>No outside food, drinks, or prohibited items allowed.</li>
-        <li>Only age 16+ allowed. Schedule subject to change.</li>
-      </ul>
+      <h2>Your Offline Ticket</h2>
+      <p>Please present this QR code at the event entrance:</p>
+      <img src="cid:qrcode" alt="QR Code Ticket" />
+      <p>Thank you for booking with Zesthaus Events!</p>
     `,
     attachments: [
       {
@@ -372,7 +255,7 @@ function getSeatType(seat) {
   return "";
 }
 
-// const PORT = process.env.PORT || 5000;
+// --- Start Server ---
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on port ${PORT}`);
 });
