@@ -5,6 +5,7 @@ const nodemailer = require("nodemailer");
 const QRCode = require('qrcode');
 const jwt = require('jsonwebtoken');
 const axios = require('axios');
+const Razorpay = require('razorpay');
 require('dotenv').config();
 
 const app = express();
@@ -32,19 +33,208 @@ app.get('/', (req, res) => {
 
 // --- Models ---
 const Booking = require('./models/Booking');
+const userSchema = new mongoose.Schema({
+  email: { type: String, required: true, unique: true },
+  name: String,
+});
+const User = mongoose.models.User || mongoose.model('User', userSchema);
 
-// Booking route (save to DB and send email)
+// --- Email Transporter ---
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS
+  }
+});
+
+// --- OTP Store (in-memory, for demo) ---
+const otpStore = new Map();
+function generateOTP() {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+}
+function setOTP(email, otp) {
+  otpStore.set(email, { otp, expires: Date.now() + 5 * 60 * 1000 }); // 5 min expiry
+}
+function getOTP(email) {
+  const entry = otpStore.get(email);
+  if (!entry) return null;
+  if (Date.now() > entry.expires) {
+    otpStore.delete(email);
+    return null;
+  }
+  return entry.otp;
+}
+function deleteOTP(email) {
+  otpStore.delete(email);
+}
+
+// --- Send OTP Endpoint ---
+app.post('/auth/send-otp', async (req, res) => {
+  const { email, forSignup } = req.body;
+  if (!email) return res.status(400).json({ message: "Email required" });
+
+  // Only send OTP for login if user exists
+  if (!forSignup) {
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res.status(400).json({ message: "User not registered. Please sign up first." });
+    }
+  }
+
+  const otp = generateOTP();
+  setOTP(email, otp);
+
+  // Send OTP via email (updated content)
+  const mailOptions = {
+    from: '"Zesthaus Events" <' + process.env.EMAIL_USER + '>',
+    to: email,
+    subject: "Zesthaus Events Email Verification Code",
+    html: `
+      <div style="font-family: Arial, sans-serif; color: #222;">
+        <h2 style="color:#1e3c72;">Zesthaus Events – Email Verification</h2>
+        <p>Dear Guest,</p>
+        <p>Your verification code is:</p>
+        <div style="font-size:2rem; font-weight:bold; letter-spacing:4px; margin:16px 0; color:#1e3c72;">${otp}</div>
+        <p>This code is valid for 5 minutes. Please enter it on the website to verify your email and continue.</p>
+        <p>If you did not request this code, you can safely ignore this email.</p>
+        <br>
+        <p>Best regards,<br>Zesthaus Events Team</p>
+      </div>
+    `
+  };
+  try {
+    await transporter.sendMail(mailOptions);
+    res.json({ message: "OTP sent to your email" });
+  } catch (err) {
+    res.status(500).json({ message: "Failed to send OTP" });
+  }
+});
+
+// --- Signup Endpoint ---
+app.post('/auth/signup', async (req, res) => {
+  const { email, otp, name } = req.body;
+  if (!email || !otp || !name) return res.status(400).json({ message: "Email, name, and OTP required" });
+
+  const validOtp = getOTP(email);
+  if (!validOtp || validOtp !== otp) {
+    return res.status(401).json({ message: "Invalid or expired OTP" });
+  }
+  deleteOTP(email);
+
+  // Check if user already exists
+  let user = await User.findOne({ email });
+  if (user) {
+    return res.status(400).json({ message: "User already exists. Please login." });
+  }
+
+  user = await User.create({ email, name });
+
+  // Issue JWT
+  const token = jwt.sign({ id: user._id, email: user.email }, process.env.JWT_SECRET, { expiresIn: '7d' });
+  res.json({ token, user });
+});
+
+// Backend: /auth/login
+app.post('/auth/login', async (req, res) => {
+  const { email, otp } = req.body;
+  if (!email || !otp) return res.status(400).json({ message: "Email and OTP required" });
+
+  const validOtp = getOTP(email);
+  if (!validOtp || validOtp !== otp) {
+    return res.status(401).json({ message: "Invalid or expired OTP" });
+  }
+  deleteOTP(email);
+
+  // Only allow login if user exists
+  let user = await User.findOne({ email });
+  if (!user) {
+    return res.status(400).json({ message: "User not registered. Please sign up first." });
+  }
+
+  // Issue JWT
+  const token = jwt.sign({ id: user._id, email: user.email }, process.env.JWT_SECRET, { expiresIn: '7d' });
+  res.json({ token, user });
+});
+
+// Utility to check for double-booked front row seats
+async function areFrontRowSeatsAvailable(seats) {
+  if (!Array.isArray(seats) || seats.length === 0) return true;
+  const bookings = await Booking.find({ frontRowSeats: { $in: seats } });
+  return bookings.length === 0;
+}
+
+// Public booking route
 app.post('/api/bookings', async (req, res) => {
-  const { seats, price, paymentId, user } = req.body;
+  const { paymentId, ...rest } = req.body;
+
+  // 1. Verify payment with Razorpay
+  try {
+    const razorpayRes = await axios.get(
+      `https://api.razorpay.com/v1/payments/${paymentId}`,
+      {
+        auth: {
+          username: process.env.RAZORPAY_KEY_ID,
+          password: process.env.RAZORPAY_KEY_SECRET,
+        },
+      }
+    );
+
+    if (razorpayRes.data.status !== "captured") {
+      return res.status(400).json({ message: "Payment not successful. Booking not saved." });
+    }
+  } catch (err) {
+    return res.status(400).json({ message: "Payment verification failed. Booking not saved." });
+  }
+
+  // 2. Now save booking as before
+  const { user, price, frontRowSeats = [], frontRowCount = 0, generalCount = 0, vipTable, combo } = req.body;
+
+  // Reject VIP bookings from public API
+  if (vipTable) {
+    return res.status(400).json({ message: "VIP bookings are only allowed via admin." });
+  }
+
+  // --- Combo price validation ---
+  let expectedPrice = price;
+  if (combo === "frontrow2") {
+    expectedPrice = 1500;
+    if (frontRowCount !== 2 || generalCount !== 0) {
+      return res.status(400).json({ message: "Invalid combo selection." });
+    }
+  } else if (combo === "general4") {
+    expectedPrice = 2199;
+    if (frontRowCount !== 0 || generalCount !== 4) {
+      return res.status(400).json({ message: "Invalid combo selection." });
+    }
+  } else {
+    // Normal pricing
+    expectedPrice = (frontRowCount * 799) + (generalCount * 599);
+  }
+  if (price !== expectedPrice) {
+    return res.status(400).json({ message: "Price mismatch." });
+  }
+  // --- End combo price validation ---
+
+  // Check for double-booked front row seats
+  if (frontRowSeats.length > 0) {
+    const available = await areFrontRowSeatsAvailable(frontRowSeats);
+    if (!available) {
+      return res.status(400).json({ message: "One or more front row seats are already booked." });
+    }
+  }
 
   try {
-    const newBooking = new Booking({ seats, price, paymentId, user });
-    await newBooking.save();
+    const newBooking = new Booking({
+      user,
+      price,
+      paymentId,
+      frontRowSeats,
+      frontRowCount,
+      generalCount
+    });
 
-    // Get seat type from the first seat
-    const seatType = getSeatType(Array.isArray(newBooking.seats) && newBooking.seats.length > 0 ? newBooking.seats[0] : "");
-
-    // Generate QR code with booking ID, seat type, and name
+    // QR code logic (customize as needed)
     const qrData = JSON.stringify({
       bookingId: newBooking._id,
       frontRowSeats,
@@ -59,28 +249,31 @@ app.post('/api/bookings', async (req, res) => {
     // Extract base64 data
     const base64Data = qrImage.replace(/^data:image\/png;base64,/, "");
 
-    // Email configuration
-    const transporter = nodemailer.createTransport({
-      service: 'gmail',
-      auth: {
-        user: 'zesthaus.events@gmail.com',
-        pass: 'gwbvnvdwoavtlcdb'
-      }
-    });
-
+    const userName = user?.name || "";
     const mailOptions = {
       from: '"Zesthaus Events" <zesthaus.events@gmail.com>',
       to: user.email,
       subject: "Jashn-e-Qawwali – Booking Confirmation",
       html: `
-        <h2>Thanks for Booking!</h2>
-        <p><strong>Payment ID:</strong> ${paymentId}</p>
-        <p><strong>Seats:</strong> ${seats.join(', ')}</p>
-        <p><strong>Total Price:</strong> ₹${price}</p>
-        <p>📍 See you on <strong>15th July 2025</strong> at the Qawwali Night in Mumbai!</p>
-        <p><strong>Your Ticket QR Code:</strong></p>
-        <img src="cid:qrcode" alt="QR Code Ticket" />
-        <p>Show this QR code at the event entrance for verification.</p>
+        <h2>Thank you for booking with Zesthaus Events!</h2>
+        <p>Dear ${userName},</p>
+        <p>Your booking for <strong>Jashn-e-Qawwali</strong> is confirmed.</p>
+        <h3>📍 Venue:</h3>
+        <p><strong>SANSKRUTI BANQUET</strong><br>Grant Road West, Mumbai</p>
+        <h3>🕖 Date & Time:</h3>
+        <p><strong>26 July 2025</strong> at <strong>7:00 PM</strong></p>
+        <p>Please present the below QR code at the entrance. It is valid for one-time scan only:</p>
+        <img src="cid:qrcode" alt="QR Code" style="max-width:200px;">
+        <p>Looking forward to welcoming you!</p>
+        <p>Warm regards,<br>Zesthaus Events Team</p>
+        <h3>📌 Terms & Conditions</h3>
+        <ul>
+          <li>Tickets are non-refundable and non-transferable.</li>
+          <li>Entry is subject to QR code scanning and security checks.</li>
+          <li>ID proof may be required.</li>
+          <li>No outside food, drinks, or prohibited items allowed.</li>
+          <li>Only age 16+ allowed. Schedule subject to change.</li>
+        </ul>
       `,
       attachments: [
         {
@@ -202,8 +395,52 @@ app.post('/admin/offline-booking', async (req, res) => {
     newBooking.qrCode = qrImage;
     await newBooking.save();
 
-    // Send email with QR code
-    await sendEmailWithQR(user.email, newBooking.qrCode);
+    // Extract base64 data
+    const base64Data = qrImage.replace(/^data:image\/png;base64,/, "");
+
+    const userName = user?.name || "";
+    const mailOptions = {
+      from: '"Zesthaus Events" <zesthaus.events@gmail.com>',
+      to: user.email,
+      subject: "Jashn-e-Qawwali – Booking Confirmation",
+      html: `
+        <h2>Thank you for booking with Zesthaus Events!</h2>
+        <p>Dear ${userName},</p>
+        <p>Your booking for <strong>Jashn-e-Qawwali</strong> is confirmed.</p>
+        <h3>📍 Venue:</h3>
+        <p><strong>SANSKRUTI BANQUET</strong><br>Grant Road West, Mumbai</p>
+        <h3>🕖 Date & Time:</h3>
+        <p><strong>26 July 2025</strong> at <strong>7:00 PM</strong></p>
+        <p>Please present the below QR code at the entrance. It is valid for one-time scan only:</p>
+        <img src="cid:qrcode" alt="QR Code" style="max-width:200px;">
+        <p>Looking forward to welcoming you!</p>
+        <p>Warm regards,<br>Zesthaus Events Team</p>
+        <h3>📌 Terms & Conditions</h3>
+        <ul>
+          <li>Tickets are non-refundable and non-transferable.</li>
+          <li>Entry is subject to QR code scanning and security checks.</li>
+          <li>ID proof may be required.</li>
+          <li>No outside food, drinks, or prohibited items allowed.</li>
+          <li>Only age 16+ allowed. Schedule subject to change.</li>
+        </ul>
+      `,
+      attachments: [
+        {
+          filename: 'qrcode.png',
+          content: base64Data,
+          encoding: 'base64',
+          cid: 'qrcode'
+        }
+      ]
+    };
+
+    transporter.sendMail(mailOptions, (err, info) => {
+      if (err) {
+        console.error('❌ Email error:', err);
+      } else {
+        console.log('📧 Email sent:', info.response);
+      }
+    });
 
     res.json({ message: "Offline booking added and email sent", booking: newBooking });
   } catch (err) {
@@ -211,40 +448,28 @@ app.post('/admin/offline-booking', async (req, res) => {
   }
 });
 
-// Email transporter using env variables
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS
+// (Optional) Endpoint to get all booked front row seats
+app.get('/api/booked-front-row-seats', async (req, res) => {
+  const bookings = await Booking.find({}, 'frontRowSeats');
+  const allSeats = bookings.flatMap(b => b.frontRowSeats);
+  res.json({ bookedSeats: allSeats });
+});
+
+// Admin route to get all users
+app.get('/admin/users', async (req, res) => {
+  const auth = req.headers.authorization;
+  if (auth !== 'Bearer supersecrettoken123') {
+    return res.status(401).json({ message: 'Unauthorized' });
+  }
+  try {
+    const users = await User.find({}, { email: 1, name: 1, _id: 1 });
+    res.json(users);
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to fetch users' });
   }
 });
 
-// Utility function to send QR email
-async function sendEmailWithQR(to, qrDataUrl) {
-  const base64Data = qrDataUrl.replace(/^data:image\/png;base64,/, "");
-  const mailOptions = {
-    from: process.env.EMAIL_USER,
-    to,
-    subject: '🎫 Qawwali Night Ticket Confirmation (Offline)',
-    html: `
-      <h2>Your Offline Ticket</h2>
-      <p>Please present this QR code at the event entrance:</p>
-      <img src="cid:qrcode" alt="QR Code Ticket" />
-      <p>Thank you for booking with Zesthaus Events!</p>
-    `,
-    attachments: [
-      {
-        filename: 'qrcode.png',
-        content: base64Data,
-        encoding: 'base64',
-        cid: 'qrcode'
-      }
-    ]
-  };
-  return transporter.sendMail(mailOptions);
-}
-
+// --- Utility Functions ---
 function getSeatType(seat) {
   if (typeof seat !== "string") return "";
   if (seat.startsWith("VIP-")) return "VIP";
@@ -254,6 +479,42 @@ function getSeatType(seat) {
   if (["VIP", "frontRow", "general"].includes(seat)) return seat; // For offline dropdown
   return "";
 }
+
+// Add this route to your Express backend:
+app.get('/api/booked-seats', async (req, res) => {
+  try {
+    // Adjust the Booking model and field as per your schema
+    const bookings = await Booking.find({}, 'frontRowSeats');
+    // Flatten all booked seats into a single array
+    const bookedFrontRowSeats = bookings.flatMap(b => b.frontRowSeats || []);
+    res.json({ bookedFrontRowSeats });
+  } catch (err) {
+    console.error('Error fetching booked seats:', err);
+    res.status(500).json({ error: 'Failed to fetch booked seats' });
+  }
+});
+
+// Example: Creating a Razorpay order with auto-capture
+const razorpay = new Razorpay({
+  key_id: process.env.RAZORPAY_KEY_ID,
+  key_secret: process.env.RAZORPAY_KEY_SECRET,
+});
+
+app.post('/api/create-order', async (req, res) => {
+  const { amount, currency, receipt } = req.body;
+  try {
+    const options = {
+      amount: amount * 100, // amount in paise
+      currency: currency || "INR",
+      receipt: receipt,
+      payment_capture: 1 // <-- THIS enables auto-capture!
+    };
+    const order = await razorpay.orders.create(options);
+    res.json(order);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to create order" });
+  }
+});
 
 // --- Start Server ---
 app.listen(PORT, '0.0.0.0', () => {
