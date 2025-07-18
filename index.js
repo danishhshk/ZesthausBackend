@@ -5,6 +5,7 @@ const nodemailer = require("nodemailer");
 const QRCode = require('qrcode');
 const jwt = require('jsonwebtoken');
 const axios = require('axios');
+const Razorpay = require('razorpay');
 require('dotenv').config();
 
 const app = express();
@@ -490,6 +491,28 @@ app.get('/api/booked-seats', async (req, res) => {
   } catch (err) {
     console.error('Error fetching booked seats:', err);
     res.status(500).json({ error: 'Failed to fetch booked seats' });
+  }
+});
+
+// Example: Creating a Razorpay order with auto-capture
+const razorpay = new Razorpay({
+  key_id: process.env.RAZORPAY_KEY_ID,
+  key_secret: process.env.RAZORPAY_KEY_SECRET,
+});
+
+app.post('/api/create-order', async (req, res) => {
+  const { amount, currency, receipt } = req.body;
+  try {
+    const options = {
+      amount: amount * 100, // amount in paise
+      currency: currency || "INR",
+      receipt: receipt,
+      payment_capture: 1 // <-- THIS enables auto-capture!
+    };
+    const order = await razorpay.orders.create(options);
+    res.json(order);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to create order" });
   }
 });
 
